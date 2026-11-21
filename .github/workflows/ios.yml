@@ -22,7 +22,7 @@ concurrency:
 jobs:
   ipa:
     runs-on: macos-15
-    timeout-minutes: 150
+    timeout-minutes: 330
     env:
       CARGO_TERM_COLOR: always
       CARGO_INCREMENTAL: "0"
@@ -38,8 +38,8 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: ios
-      - name: Tests (the parts that run anywhere)
-        run: cargo test --locked -p solidcraft-ios -j 3
+          # Keep what compiled even when a step fails: the next run starts from there.
+          cache-on-failure: true
       - name: Clippy for iOS
         run: cargo clippy --locked --target aarch64-apple-ios -p solidcraft-ios -j 3 -- -D warnings
       - name: Build SolidCraft.ipa
@@ -50,3 +50,6 @@ jobs:
           path: target/ios/SolidCraft.ipa
           retention-days: 7
           if-no-files-found: error
+      # Last: the host build they need is long, and the .ipa shouldn't wait for it.
+      - name: Tests (the parts that run anywhere)
+        run: cargo test --locked -p solidcraft-ios -j 3

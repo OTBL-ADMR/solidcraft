@@ -337,7 +337,8 @@ fn try_read_font(path: &std::path::Path) -> Option<Vec<u8>> {
 }
 
 /// Recursively search for matching font files up to a bounded depth, testing names with `matches`.
-#[cfg(not(target_arch = "wasm32"))]
+/// Only the systems whose font folders are known search them (iPadOS keeps its fonts out of reach).
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 fn scan_dir_for_font(dir: &std::path::Path, depth_remaining: usize, matches: fn(&str) -> bool) -> Option<Vec<u8>> {
     scan_dir_for_font_where(dir, depth_remaining, matches, |_| true)
 }
@@ -607,6 +608,8 @@ fn draws_simplified_chinese(bytes: &[u8]) -> bool {
 /// Japanese CJK font drew the Chinese UI alone and its simplified characters showed as boxes).
 #[cfg(not(target_arch = "wasm32"))]
 fn chinese_font_dirs() -> Vec<std::path::PathBuf> {
+    // Elsewhere (iPadOS, the BSDs) there are no folders to add.
+    #[cfg_attr(not(any(target_os = "windows", target_os = "macos", target_os = "linux")), allow(unused_mut))]
     let mut dirs = Vec::new();
     #[cfg(target_os = "windows")]
     {
