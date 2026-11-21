@@ -1,0 +1,52 @@
+# The iPad app (apps/solidcraft-ios): a Clippy check for iOS and an unsigned SolidCraft.ipa, built
+# on GitHub's macOS runners. Install the .ipa with SideStore, AltStore or Sideloadly, which sign it
+# with your Apple ID (packaging/ios/README.md). Runs on pushes to the port's branch, or by hand.
+#
+# The .ipa is for your own iPad: SolidCraft's brand licence (LICENSE-BRAND, 3c) needs the
+# maintainers' permission to give a modified build to others under its name.
+name: iOS
+
+on:
+  push:
+    branches: [ipad-port]
+    paths-ignore: ["docs/**", "**/*.md"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ipa:
+    runs-on: macos-15
+    timeout-minutes: 150
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: "0"
+      # The runner has 7 GB: no link-time optimisation, three jobs.
+      CARGO_PROFILE_RELEASE_LTO: "false"
+      CARGO_PROFILE_RELEASE_DEBUG: "false"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          targets: aarch64-apple-ios
+          components: clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: ios
+      - name: Tests (the parts that run anywhere)
+        run: cargo test --locked -p solidcraft-ios -j 3
+      - name: Clippy for iOS
+        run: cargo clippy --locked --target aarch64-apple-ios -p solidcraft-ios -j 3 -- -D warnings
+      - name: Build SolidCraft.ipa
+        run: JOBS=3 NO_LTO=1 packaging/ios/build-ipa.sh
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: SolidCraft-ipad-unsigned
+          path: target/ios/SolidCraft.ipa
+          retention-days: 7
+          if-no-files-found: error

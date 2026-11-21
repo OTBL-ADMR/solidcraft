@@ -1,0 +1,35 @@
+[package]
+name = "solidcraft-ios"
+description = "SolidCraft on iPad (eframe native runner, Metal through wgpu)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "solidcraft-ios"
+path = "src/main.rs"
+
+[features]
+default = ["profile"]
+bundled-render-library = ["solidcraft-engine/bundled-render-library"]
+# The profiler, compiled in so any build can say where its time goes; it records nothing until asked.
+profile = ["solidcraft-engine/profile"]
+# Type-check the iOS host (src/ios.rs) on Linux, where the iOS target isn't installed:
+# `cargo check -p solidcraft-ios --features host-check`. It builds the same code against X11.
+host-check = ["dep:eframe", "eframe/x11"]
+
+[dependencies]
+solidcraft-engine = { workspace = true }
+solidcraft-ui-egui = { workspace = true }
+egui = { workspace = true }
+log = { workspace = true }
+eframe = { workspace = true, optional = true, features = ["default_fonts", "wgpu"] }
+
+# The window and the GPU: winit's UIKit backend and wgpu's Metal backend. No clipboard, accessibility
+# or Linux window-system features: egui-winit has no iOS clipboard, and those pull in desktop crates.
+[target.'cfg(target_os = "ios")'.dependencies]
+eframe = { workspace = true, features = ["default_fonts", "wgpu"] }
