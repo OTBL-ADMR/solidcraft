@@ -57,6 +57,13 @@ crates to this tree the same way, with
 `[patch.crates-io] egui-wgpu = { path = ".../vendor/egui/crates/egui-wgpu" }` and the same for the others.
 
 SolidCraft changes to egui and eframe:
+- `crates/egui-wgpu/src/winit.rs` (`window_surface_size`), `crates/eframe/src/native/wgpu_integration.rs`:
+  on iOS the window's surface has the size egui lays the screen out at, the whole window
+  (`outer_size`, as `egui_winit::screen_size_in_pixels` uses there), not the safe area
+  (`inner_size`). The smaller surface was stretched over the whole view, so on the iPad app
+  everything was drawn a little lower than egui placed it, by nothing at the top and by the insets
+  at the bottom, and a mouse pointer hit just below what it pointed at. Other systems keep
+  `inner_size`.
 - `crates/egui/src/data/input/raw_input.rs`, `crates/egui/src/input_state/mod.rs`,
   `crates/eframe/src/epi.rs`, `crates/eframe/src/native/{winit,wgpu,glow}_integration.rs`:
   backport of emilk/egui#8768 (open upstream, against egui's `main`). `RawInput::repaint_on_pointer_move`

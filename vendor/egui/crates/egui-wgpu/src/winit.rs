@@ -9,6 +9,20 @@ use core::num::NonZeroU32;
 use egui::{Context, ViewportId, ViewportIdMap, ViewportIdSet};
 use std::sync::Arc;
 
+/// SolidCraft: the size of the window's surface, in pixels: the size egui lays the screen out at
+/// (as `egui_winit::screen_size_in_pixels` does). On iOS that is the whole window (`outer_size`),
+/// behind the status bar and the home indicator too, while `inner_size` is the safe area only; a
+/// surface of the safe area's size was stretched over the whole view, so everything was drawn a
+/// little lower than egui placed it (by nothing at the top, by the insets at the bottom) and the
+/// pointer hit below what it pointed at. Elsewhere it is `inner_size`, as before.
+pub fn window_surface_size(window: &winit::window::Window) -> winit::dpi::PhysicalSize<u32> {
+    if cfg!(target_os = "ios") {
+        window.outer_size()
+    } else {
+        window.inner_size()
+    }
+}
+
 struct SurfaceState {
     surface: wgpu::Surface<'static>,
     alpha_mode: wgpu::CompositeAlphaMode,
@@ -301,7 +315,7 @@ impl Painter {
         profiling::scope!("Painter::set_window"); // profile_function gives bad names for async functions
 
         if let Some(window) = window {
-            let size = window.inner_size();
+            let size = window_surface_size(&window); // SolidCraft
             if !self.surfaces.contains_key(&viewport_id) {
                 crate::startup_step(crate::STEP_SURFACE, ""); // SolidCraft
                 let surface = self.instance.create_surface(window)?;
@@ -328,7 +342,7 @@ impl Painter {
         profiling::scope!("Painter::set_window_unsafe"); // profile_function gives bad names for async functions
 
         if let Some(window) = window {
-            let size = window.inner_size();
+            let size = window_surface_size(&window); // SolidCraft
             if !self.surfaces.contains_key(&viewport_id) {
                 let surface = unsafe {
                     self.instance
@@ -763,7 +777,7 @@ impl Painter {
         };
         // SolidCraft: a minimized native window may retain a clamped 1x1 surface.
         if let Some(effect) = &render_state.renderer.read().frame_compositor {
-            let extent = window.inner_size();
+            let extent = window_surface_size(window);
             if extent.width == 0 || extent.height == 0 {
                 effect.suspend();
                 return vsync_sec;

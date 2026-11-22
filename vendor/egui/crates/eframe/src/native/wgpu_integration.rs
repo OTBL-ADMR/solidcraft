@@ -1007,7 +1007,8 @@ impl WgpuWinitRunning<'_> {
                 let physical_size = viewport_id
                     .and_then(|id| shared.viewports.get(&id))
                     .and_then(|viewport| viewport.window.as_ref())
-                    .map_or(*physical_size, |window| window.inner_size());
+                    // SolidCraft: the surface's size, which on iOS is the whole window.
+                    .map_or(*physical_size, |window| egui_wgpu::winit::window_surface_size(window));
 
                 // Resize with 0 width and height is used by winit to signal a minimize event on Windows.
                 // See: https://github.com/rust-windowing/winit/issues/208
