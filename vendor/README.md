@@ -213,3 +213,19 @@ SolidCraft changes:
   `dark_mode.rs` passes the structure size to `RtlGetVersion`, as its documentation requires,
   since this choice depends on the build number it returns. eframe 0.37 requires
   winit 0.30, so this cannot come from a newer winit.
+- `src/platform_impl/ios/view.rs`, `Cargo.toml` (the `UICommand` and `UIHoverGestureRecognizer`
+  features of `objc2-ui-kit`, `NSValue` of `objc2-foundation`): on iPadOS a mouse or trackpad
+  is a mouse, for the iPad app (`apps/solidcraft-ios`). winit sent its clicks as touches, so
+  the app could not tell the left, right and middle buttons apart, and the pointer over the view
+  and the wheel sent nothing. A touch of UIKit's `IndirectPointer` type (the app sets
+  `UIApplicationSupportsIndirectInputEvents`) now sends `CursorMoved` and a `MouseInput` press or
+  release for each button whose bit in the event's `buttonMask` changed (bits 0–4: left, right,
+  middle, back, forward); all buttons are released when the touch ends, and a touch that begins
+  with an empty mask is a left click. A `UIHoverGestureRecognizer` sends `CursorEntered`,
+  `CursorMoved` and `CursorLeft` for the pointer with no button down. Two pan recognizers that
+  take no touches (`allowedTouchTypes` empty) send scrolling as `MouseWheel`: discrete scrolls
+  (a wheel) as `LineDelta` with phase `Moved`, at 10 points a line, and continuous ones (two
+  fingers on a trackpad) as `PixelDelta` from `Started` to `Ended`, as a wheel and a trackpad
+  are told apart elsewhere. The keys held (`modifierFlags`) are sent as `ModifiersChanged`
+  before each of these. Fingers and the pencil reach `touchesBegan` as before. Upstream winit
+  0.30 has no iOS mouse support, and eframe 0.37 requires winit 0.30.

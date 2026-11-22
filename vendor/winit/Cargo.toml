@@ -369,16 +369,22 @@ features = [
     "NSProcessInfo",
     "NSThread",
     "NSSet",
+    # SolidCraft: NSNumber, for a scroll recognizer's empty `allowedTouchTypes`.
+    "NSValue",
 ]
 
 [target.'cfg(target_os = "ios")'.dependencies.objc2-ui-kit]
 version = "0.2.2"
 features = [
     "UIApplication",
+    # SolidCraft: UIKeyModifierFlags, the keys held at a mouse click or scroll.
+    "UICommand",
     "UIDevice",
     "UIEvent",
     "UIGeometry",
     "UIGestureRecognizer",
+    # SolidCraft: the pointer of a mouse or trackpad over the view, without a button down.
+    "UIHoverGestureRecognizer",
     "UITextInput",
     "UITextInputTraits",
     "UIOrientation",

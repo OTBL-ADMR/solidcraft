@@ -4,19 +4,27 @@ use std::cell::{Cell, RefCell};
 use objc2::rc::Retained;
 use objc2::runtime::{NSObjectProtocol, ProtocolObject};
 use objc2::{declare_class, msg_send, msg_send_id, mutability, sel, ClassType, DeclaredClass};
-use objc2_foundation::{CGFloat, CGPoint, CGRect, MainThreadMarker, NSObject, NSSet, NSString};
+use objc2_foundation::{
+    CGFloat, CGPoint, CGRect, MainThreadMarker, NSArray, NSNumber, NSObject, NSSet, NSString,
+};
 use objc2_ui_kit::{
-    UICoordinateSpace, UIEvent, UIForceTouchCapability, UIGestureRecognizer,
-    UIGestureRecognizerDelegate, UIGestureRecognizerState, UIKeyInput, UIPanGestureRecognizer,
-    UIPinchGestureRecognizer, UIResponder, UIRotationGestureRecognizer, UITapGestureRecognizer,
-    UITextInputTraits, UITouch, UITouchPhase, UITouchType, UITraitEnvironment, UIView,
+    UICoordinateSpace, UIEvent, UIEventButtonMask, UIForceTouchCapability, UIGestureRecognizer,
+    UIGestureRecognizerDelegate, UIGestureRecognizerState, UIHoverGestureRecognizer, UIKeyInput,
+    UIKeyModifierFlags, UIPanGestureRecognizer, UIPinchGestureRecognizer, UIResponder,
+    UIRotationGestureRecognizer, UIScrollTypeMask, UITapGestureRecognizer, UITextInputTraits,
+    UITouch, UITouchPhase, UITouchType, UITraitEnvironment, UIView,
 };
 
 use super::app_state::{self, EventWrapper};
 use super::window::WinitUIWindow;
 use crate::dpi::PhysicalPosition;
-use crate::event::{ElementState, Event, Force, KeyEvent, Touch, TouchPhase, WindowEvent};
-use crate::keyboard::{Key, KeyCode, KeyLocation, NamedKey, NativeKeyCode, PhysicalKey};
+use crate::event::{
+    ElementState, Event, Force, KeyEvent, Modifiers, MouseButton, MouseScrollDelta, Touch,
+    TouchPhase, WindowEvent,
+};
+use crate::keyboard::{
+    Key, KeyCode, KeyLocation, ModifiersState, NamedKey, NativeKeyCode, PhysicalKey,
+};
 use crate::platform_impl::platform::DEVICE_ID;
 use crate::platform_impl::KeyEventExtra;
 use crate::window::{WindowAttributes, WindowId as RootWindowId};
@@ -31,6 +39,46 @@ pub struct WinitViewState {
     rotation_last_delta: Cell<CGFloat>,
     pinch_last_delta: Cell<CGFloat>,
     pan_last_delta: Cell<CGPoint>,
+
+    // SolidCraft: a mouse or trackpad (UIKit's indirect pointer, with
+    // `UIApplicationSupportsIndirectInputEvents`) as a mouse, not as touches: its buttons from the
+    // event's button mask, the pointer over the view from a hover recognizer, and the wheel and
+    // two-finger scroll from scroll-only pan recognizers.
+    hover_gesture_recognizer: RefCell<Option<Retained<UIHoverGestureRecognizer>>>,
+    wheel_gesture_recognizer: RefCell<Option<Retained<UIPanGestureRecognizer>>>,
+    trackpad_scroll_gesture_recognizer: RefCell<Option<Retained<UIPanGestureRecognizer>>>,
+    /// The buttons held, as `UIEventButtonMask` bits.
+    pointer_buttons: Cell<isize>,
+    /// The modifier keys last reported, from the pointer's events.
+    pointer_modifiers: Cell<ModifiersState>,
+    wheel_last_translation: Cell<CGPoint>,
+    trackpad_scroll_last_translation: Cell<CGPoint>,
+}
+
+/// SolidCraft: points of a discrete (mouse wheel) scroll taken as one line, as a wheel's
+/// `LineDelta`. Not measured on a device yet.
+const WHEEL_POINTS_PER_LINE: f64 = 10.0;
+
+/// SolidCraft: winit's button for a `UIEventButtonMask` bit (bit 0 is button 1, the primary).
+fn mouse_button(bit: u32) -> MouseButton {
+    match bit {
+        0 => MouseButton::Left,
+        1 => MouseButton::Right,
+        2 => MouseButton::Middle,
+        3 => MouseButton::Back,
+        4 => MouseButton::Forward,
+        n => MouseButton::Other(n as u16 + 1),
+    }
+}
+
+/// SolidCraft: the modifier keys of UIKit's flags.
+fn modifiers_state(flags: UIKeyModifierFlags) -> ModifiersState {
+    let mut state = ModifiersState::empty();
+    state.set(ModifiersState::SHIFT, flags.contains(UIKeyModifierFlags::UIKeyModifierShift));
+    state.set(ModifiersState::CONTROL, flags.contains(UIKeyModifierFlags::UIKeyModifierControl));
+    state.set(ModifiersState::ALT, flags.contains(UIKeyModifierFlags::UIKeyModifierAlternate));
+    state.set(ModifiersState::SUPER, flags.contains(UIKeyModifierFlags::UIKeyModifierCommand));
+    state
 }
 
 declare_class!(
@@ -149,23 +197,23 @@ declare_class!(
         }
 
         #[method(touchesBegan:withEvent:)]
-        fn touches_began(&self, touches: &NSSet<UITouch>, _event: Option<&UIEvent>) {
-            self.handle_touches(touches)
+        fn touches_began(&self, touches: &NSSet<UITouch>, event: Option<&UIEvent>) {
+            self.handle_touches(touches, event)
         }
 
         #[method(touchesMoved:withEvent:)]
-        fn touches_moved(&self, touches: &NSSet<UITouch>, _event: Option<&UIEvent>) {
-            self.handle_touches(touches)
+        fn touches_moved(&self, touches: &NSSet<UITouch>, event: Option<&UIEvent>) {
+            self.handle_touches(touches, event)
         }
 
         #[method(touchesEnded:withEvent:)]
-        fn touches_ended(&self, touches: &NSSet<UITouch>, _event: Option<&UIEvent>) {
-            self.handle_touches(touches)
+        fn touches_ended(&self, touches: &NSSet<UITouch>, event: Option<&UIEvent>) {
+            self.handle_touches(touches, event)
         }
 
         #[method(touchesCancelled:withEvent:)]
-        fn touches_cancelled(&self, touches: &NSSet<UITouch>, _event: Option<&UIEvent>) {
-            self.handle_touches(touches)
+        fn touches_cancelled(&self, touches: &NSSet<UITouch>, event: Option<&UIEvent>) {
+            self.handle_touches(touches, event)
         }
 
         #[method(pinchGesture:)]
@@ -317,6 +365,54 @@ declare_class!(
             app_state::handle_nonuser_event(mtm, gesture_event);
         }
 
+        // SolidCraft: the pointer moving over the view with no button down.
+        #[method(hoverGesture:)]
+        fn hover_gesture(&self, recognizer: &UIHoverGestureRecognizer) {
+            let Some(window) = self.window() else { return };
+            let window_id = RootWindowId(window.id());
+            let mut events = self.modifier_events(window_id, unsafe { recognizer.modifierFlags() });
+            let position = self.physical(unsafe { recognizer.locationInView(None) });
+            match recognizer.state() {
+                UIGestureRecognizerState::Began => {
+                    events.push(Self::window_event(window_id, WindowEvent::CursorEntered { device_id: DEVICE_ID }));
+                    events.push(Self::window_event(window_id, WindowEvent::CursorMoved { device_id: DEVICE_ID, position }));
+                }
+                UIGestureRecognizerState::Changed => {
+                    events.push(Self::window_event(window_id, WindowEvent::CursorMoved { device_id: DEVICE_ID, position }));
+                }
+                // A button pressed ends the hover; the click's touch carries the pointer from
+                // there, so the pointer stays over the view.
+                UIGestureRecognizerState::Ended | UIGestureRecognizerState::Cancelled
+                    if self.ivars().pointer_buttons.get() != 0 => {}
+                UIGestureRecognizerState::Ended | UIGestureRecognizerState::Cancelled | UIGestureRecognizerState::Failed => {
+                    events.push(Self::window_event(window_id, WindowEvent::CursorLeft { device_id: DEVICE_ID }));
+                }
+                _ => {}
+            }
+            let mtm = MainThreadMarker::from(self);
+            app_state::handle_nonuser_events(mtm, events);
+        }
+
+        // SolidCraft: a mouse wheel, as lines that never end (like a wheel elsewhere).
+        #[method(wheelGesture:)]
+        fn wheel_gesture(&self, recognizer: &UIPanGestureRecognizer) {
+            let Some((dx, dy, _)) = self.scroll_delta(recognizer, &self.ivars().wheel_last_translation) else { return };
+            let delta = MouseScrollDelta::LineDelta(
+                (dx / WHEEL_POINTS_PER_LINE) as f32,
+                (dy / WHEEL_POINTS_PER_LINE) as f32,
+            );
+            self.send_scroll(recognizer, delta, TouchPhase::Moved);
+        }
+
+        // SolidCraft: two fingers on a trackpad, as pixels in a bracket (Started … Ended).
+        #[method(trackpadScrollGesture:)]
+        fn trackpad_scroll_gesture(&self, recognizer: &UIPanGestureRecognizer) {
+            let Some((dx, dy, phase)) = self.scroll_delta(recognizer, &self.ivars().trackpad_scroll_last_translation) else { return };
+            let scale = self.contentScaleFactor() as f64;
+            let delta = MouseScrollDelta::PixelDelta(PhysicalPosition::new(dx * scale, dy * scale));
+            self.send_scroll(recognizer, delta, phase);
+        }
+
         #[method(canBecomeFirstResponder)]
         fn can_become_first_responder(&self) -> bool {
             true
@@ -368,10 +464,19 @@ impl WinitView {
             rotation_last_delta: Cell::new(0.0),
             pinch_last_delta: Cell::new(0.0),
             pan_last_delta: Cell::new(CGPoint { x: 0.0, y: 0.0 }),
+
+            hover_gesture_recognizer: RefCell::new(None),
+            wheel_gesture_recognizer: RefCell::new(None),
+            trackpad_scroll_gesture_recognizer: RefCell::new(None),
+            pointer_buttons: Cell::new(0),
+            pointer_modifiers: Cell::new(ModifiersState::empty()),
+            wheel_last_translation: Cell::new(CGPoint { x: 0.0, y: 0.0 }),
+            trackpad_scroll_last_translation: Cell::new(CGPoint { x: 0.0, y: 0.0 }),
         });
         let this: Retained<Self> = unsafe { msg_send_id![super(this), initWithFrame: frame] };
 
         this.setMultipleTouchEnabled(true);
+        this.recognize_pointer();
 
         if let Some(scale_factor) = window_attributes.platform_specific.scale_factor {
             this.setContentScaleFactor(scale_factor as _);
@@ -474,13 +579,159 @@ impl WinitView {
         }
     }
 
-    fn handle_touches(&self, touches: &NSSet<UITouch>) {
+    /// SolidCraft: the hover and the two scroll recognizers. None of them takes touches, so
+    /// fingers and the pencil reach `touchesBegan` as before.
+    fn recognize_pointer(&self) {
+        let mtm = MainThreadMarker::from(self);
+        let no_touches: Retained<NSArray<NSNumber>> = NSArray::new();
+
+        let hover = unsafe {
+            UIHoverGestureRecognizer::initWithTarget_action(
+                mtm.alloc(),
+                Some(self),
+                Some(sel!(hoverGesture:)),
+            )
+        };
+        hover.setDelegate(Some(ProtocolObject::from_ref(self)));
+        unsafe { hover.setCancelsTouchesInView(false) };
+        self.addGestureRecognizer(&hover);
+        self.ivars().hover_gesture_recognizer.replace(Some(hover));
+
+        for (action, mask, slot) in [
+            (
+                sel!(wheelGesture:),
+                UIScrollTypeMask::Discrete,
+                &self.ivars().wheel_gesture_recognizer,
+            ),
+            (
+                sel!(trackpadScrollGesture:),
+                UIScrollTypeMask::Continuous,
+                &self.ivars().trackpad_scroll_gesture_recognizer,
+            ),
+        ] {
+            let scroll = unsafe {
+                UIPanGestureRecognizer::initWithTarget_action(mtm.alloc(), Some(self), Some(action))
+            };
+            scroll.setDelegate(Some(ProtocolObject::from_ref(self)));
+            unsafe {
+                scroll.setAllowedScrollTypesMask(mask);
+                // Scroll only: a finger drag stays a touch.
+                scroll.setAllowedTouchTypes(&no_touches);
+                scroll.setCancelsTouchesInView(false);
+            }
+            self.addGestureRecognizer(&scroll);
+            slot.replace(Some(scroll));
+        }
+    }
+
+    /// SolidCraft: a point in the window's coordinates, in physical pixels.
+    fn physical(&self, logical: CGPoint) -> PhysicalPosition<f64> {
+        PhysicalPosition::from_logical::<(f64, f64), f64>(
+            (logical.x as _, logical.y as _),
+            self.contentScaleFactor() as f64,
+        )
+    }
+
+    fn window_event(window_id: RootWindowId, event: WindowEvent) -> EventWrapper {
+        EventWrapper::StaticEvent(Event::WindowEvent { window_id, event })
+    }
+
+    /// SolidCraft: `ModifiersChanged` when the keys held differ from the last ones reported.
+    fn modifier_events(&self, window_id: RootWindowId, flags: UIKeyModifierFlags) -> Vec<EventWrapper> {
+        let state = modifiers_state(flags);
+        if self.ivars().pointer_modifiers.replace(state) == state {
+            return Vec::new();
+        }
+        vec![Self::window_event(window_id, WindowEvent::ModifiersChanged(Modifiers::from(state)))]
+    }
+
+    /// SolidCraft: the scroll since the last call in points, and its phase; None for a state
+    /// with nothing to send.
+    fn scroll_delta(
+        &self,
+        recognizer: &UIPanGestureRecognizer,
+        last: &Cell<CGPoint>,
+    ) -> Option<(f64, f64, TouchPhase)> {
+        let translation = recognizer.translationInView(Some(self));
+        let zero = CGPoint { x: 0.0, y: 0.0 };
+        let (phase, previous) = match recognizer.state() {
+            UIGestureRecognizerState::Began => (TouchPhase::Started, last.replace(translation)),
+            UIGestureRecognizerState::Changed => (TouchPhase::Moved, last.replace(translation)),
+            UIGestureRecognizerState::Ended => (TouchPhase::Ended, last.replace(zero)),
+            UIGestureRecognizerState::Cancelled | UIGestureRecognizerState::Failed => {
+                last.set(zero);
+                return Some((0.0, 0.0, TouchPhase::Cancelled));
+            }
+            _ => return None,
+        };
+        let previous = if phase == TouchPhase::Started { zero } else { previous };
+        Some(((translation.x - previous.x) as f64, (translation.y - previous.y) as f64, phase))
+    }
+
+    /// SolidCraft: the pointer's place and keys, then the scroll.
+    fn send_scroll(&self, recognizer: &UIPanGestureRecognizer, delta: MouseScrollDelta, phase: TouchPhase) {
+        let Some(window) = self.window() else { return };
+        let window_id = RootWindowId(window.id());
+        let mut events = self.modifier_events(window_id, unsafe { recognizer.modifierFlags() });
+        let position = self.physical(unsafe { recognizer.locationInView(None) });
+        events.push(Self::window_event(window_id, WindowEvent::CursorMoved { device_id: DEVICE_ID, position }));
+        if delta != MouseScrollDelta::LineDelta(0.0, 0.0) || phase != TouchPhase::Moved {
+            events.push(Self::window_event(window_id, WindowEvent::MouseWheel { device_id: DEVICE_ID, delta, phase }));
+        }
+        let mtm = MainThreadMarker::from(self);
+        app_state::handle_nonuser_events(mtm, events);
+    }
+
+    /// SolidCraft: a mouse or trackpad click and drag: the pointer's place, then a press or a
+    /// release for each button whose bit in the event's mask changed. All buttons are up once
+    /// the touch ends; a touch that begins with an empty mask is a primary click.
+    fn pointer_events(
+        &self,
+        window_id: RootWindowId,
+        touch: &UITouch,
+        event: Option<&UIEvent>,
+    ) -> Vec<EventWrapper> {
+        let phase = touch.phase();
+        let mut events = match event {
+            Some(e) => self.modifier_events(window_id, unsafe { e.modifierFlags() }),
+            None => Vec::new(),
+        };
+        let position = self.physical(touch.locationInView(None));
+        events.push(Self::window_event(window_id, WindowEvent::CursorMoved { device_id: DEVICE_ID, position }));
+        let held = match phase {
+            UITouchPhase::Ended | UITouchPhase::Cancelled => 0,
+            _ => {
+                let mask = event.map_or(UIEventButtonMask::Primary, |e| unsafe { e.buttonMask() });
+                if mask.0 == 0 { UIEventButtonMask::Primary.0 } else { mask.0 }
+            }
+        };
+        let before = self.ivars().pointer_buttons.replace(held);
+        let changed = before ^ held;
+        for bit in 0..(isize::BITS - 1) {
+            if changed & (1 << bit) == 0 {
+                continue;
+            }
+            let state = if held & (1 << bit) != 0 { ElementState::Pressed } else { ElementState::Released };
+            events.push(Self::window_event(
+                window_id,
+                WindowEvent::MouseInput { device_id: DEVICE_ID, state, button: mouse_button(bit) },
+            ));
+        }
+        events
+    }
+
+    fn handle_touches(&self, touches: &NSSet<UITouch>, event: Option<&UIEvent>) {
         let window = self.window().unwrap();
         let mut touch_events = Vec::new();
         let os_supports_force = app_state::os_capabilities().force_touch;
         for touch in touches {
             let logical_location = touch.locationInView(None);
             let touch_type = touch.r#type();
+            // SolidCraft: a mouse or trackpad is a mouse.
+            if touch_type == UITouchType::IndirectPointer {
+                touch_events.extend(self.pointer_events(RootWindowId(window.id()), touch, event));
+                continue;
+            }
             let force = if os_supports_force {
                 let trait_collection = self.traitCollection();
                 let touch_capability = trait_collection.forceTouchCapability();

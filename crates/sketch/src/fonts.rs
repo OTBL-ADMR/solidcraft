@@ -492,6 +492,9 @@ pub fn font_dirs() -> Vec<PathBuf> {
         if let Some(h) = home() {
             dirs.push(h.join("Library").join("Fonts"));
         }
+    } else if cfg!(target_os = "ios") {
+        // iPadOS: the system's fonts only (an app can't install fonts into a folder of its own).
+        dirs.push(PathBuf::from("/System/Library/Fonts"));
     } else {
         if let Some(d) = env("XDG_DATA_HOME") {
             dirs.push(d.join("fonts"));

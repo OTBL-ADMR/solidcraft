@@ -318,6 +318,45 @@ pub fn is_chinese_font_name(file_name: &str) -> bool {
     CHINESE_FONT_KEYWORDS.iter().any(|k| name.contains(k))
 }
 
+/// Lower-case file-name fragments of fonts that draw Hangul, searched for where the known paths of
+/// [`fallback::HANGUL`] are not there (iPadOS keeps its fonts in folders of its own).
+pub const HANGUL_FONT_KEYWORDS: &[&str] =
+    &["applesdgothicneo", "applegothic", "applemyungjo", "malgun", "nanum", "notosanskr", "notoserifkr", "notosanscjk", "notoserifcjk"];
+
+/// Whether a font file name looks like a font that draws Hangul.
+pub fn is_hangul_font_name(file_name: &str) -> bool {
+    let name = file_name.to_ascii_lowercase();
+    HANGUL_FONT_KEYWORDS.iter().any(|k| name.contains(k))
+}
+
+/// The system font folder of iPadOS, searched a few folders deep: its fonts sit in subfolders of
+/// it, and which file has which family changes between releases, so names are matched there and
+/// each match is checked to draw its script.
+#[cfg(target_os = "ios")]
+const IOS_FONT_DIR: &str = "/System/Library/Fonts";
+
+/// A Hangul syllable (han), drawn by any font that covers Korean.
+#[cfg(target_os = "ios")]
+const HANGUL_PROBE: char = '한';
+
+#[cfg(target_os = "ios")]
+fn draws_hangul(bytes: &[u8]) -> bool {
+    covers(bytes, HANGUL_PROBE)
+}
+
+/// A Hangul face: the known files, then (iPadOS) the system font folder.
+#[cfg(not(target_arch = "wasm32"))]
+fn find_system_hangul_font() -> Option<Vec<u8>> {
+    if let Some(bytes) = first_candidate(fallback::HANGUL) {
+        return Some(bytes);
+    }
+    #[cfg(target_os = "ios")]
+    if let Some(bytes) = scan_dir_for_font_where(std::path::Path::new(IOS_FONT_DIR), 3, is_hangul_font_name, draws_hangul) {
+        return Some(bytes);
+    }
+    None
+}
+
 /// Whether the first face in `bytes` draws `c`: some candidates (an older Arial, a trimmed
 /// DejaVu) may lack the script they are listed for.
 #[cfg(not(target_arch = "wasm32"))]
@@ -337,7 +376,8 @@ fn try_read_font(path: &std::path::Path) -> Option<Vec<u8>> {
 }
 
 /// Recursively search for matching font files up to a bounded depth, testing names with `matches`.
-/// Only the systems whose font folders are known search them (iPadOS keeps its fonts out of reach).
+/// Windows, macOS and Linux search their font folders with it; iPadOS checks each match draws its
+/// script ([`scan_dir_for_font_where`]).
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 fn scan_dir_for_font(dir: &std::path::Path, depth_remaining: usize, matches: fn(&str) -> bool) -> Option<Vec<u8>> {
     scan_dir_for_font_where(dir, depth_remaining, matches, |_| true)
@@ -439,6 +479,17 @@ fn find_system_cjk_font() -> Option<Vec<u8>> {
         }
     }
 
+    // Japanese text: Hiragino, whose iPadOS file may have its Japanese name (ヒラギノ角ゴシック).
+    #[cfg(target_os = "ios")]
+    {
+        fn is_ios_cjk_font_name(name: &str) -> bool {
+            is_cjk_font_name(name) || name.contains("ヒラギノ")
+        }
+        if let Some(bytes) = scan_dir_for_font_where(std::path::Path::new(IOS_FONT_DIR), 3, is_ios_cjk_font_name, |b| covers(b, 'の')) {
+            return Some(bytes);
+        }
+    }
+
     #[cfg(target_os = "linux")]
     {
         let search_dirs = [
@@ -492,7 +543,7 @@ fn system_fallbacks() -> &'static SystemFonts {
     SYSTEM_FONTS.get_or_init(|| {
         let cjk = find_system_cjk_font();
         let chinese = find_system_chinese_font().filter(|bytes| cjk.as_ref() != Some(bytes));
-        let hangul = first_candidate(fallback::HANGUL);
+        let hangul = find_system_hangul_font();
         let thai = first_candidate(fallback::THAI);
         let hebrew =
             fallback::candidate_files(fallback::HEBREW).find_map(|path| try_read_font(std::path::Path::new(path)).filter(|bytes| covers(bytes, 'א')));
@@ -608,8 +659,8 @@ fn draws_simplified_chinese(bytes: &[u8]) -> bool {
 /// Japanese CJK font drew the Chinese UI alone and its simplified characters showed as boxes).
 #[cfg(not(target_arch = "wasm32"))]
 fn chinese_font_dirs() -> Vec<std::path::PathBuf> {
-    // Elsewhere (iPadOS, the BSDs) there are no folders to add.
-    #[cfg_attr(not(any(target_os = "windows", target_os = "macos", target_os = "linux")), allow(unused_mut))]
+    // Elsewhere (the BSDs) there are no folders to add.
+    #[cfg_attr(not(any(target_os = "windows", target_os = "macos", target_os = "linux", target_os = "ios")), allow(unused_mut))]
     let mut dirs = Vec::new();
     #[cfg(target_os = "windows")]
     {
@@ -629,6 +680,8 @@ fn chinese_font_dirs() -> Vec<std::path::PathBuf> {
             dirs.push(std::path::PathBuf::from(home).join("Library/Fonts"));
         }
     }
+    #[cfg(target_os = "ios")]
+    dirs.push(std::path::PathBuf::from(IOS_FONT_DIR));
     #[cfg(target_os = "linux")]
     {
         dirs.push(std::path::PathBuf::from("/usr/share/fonts"));
@@ -1223,6 +1276,24 @@ mod tests {
         }
         for latin in ["NotoSans-Regular.ttf", "NotoSerif-Bold.ttf", "NotoMono-Regular.ttf", "GOTHIC.TTF", "DejaVuSans.ttf", "DroidSans.ttf"] {
             assert!(!is_cjk_font_name(latin), "{latin} is not a CJK font");
+        }
+    }
+
+    #[test]
+    fn hangul_font_names_match_the_korean_fonts_systems_install() {
+        for korean in [
+            "AppleSDGothicNeo.ttc",
+            "AppleSDGothicNeo-Regular.otf",
+            "AppleGothic.ttf",
+            "malgun.ttf",
+            "NanumGothic.ttf",
+            "NotoSansKR-Regular.otf",
+            "NotoSansCJK-Regular.ttc",
+        ] {
+            assert!(is_hangul_font_name(korean), "{korean} draws Hangul");
+        }
+        for other in ["Hiragino Sans W3.ttc", "PingFang.ttc", "meiryo.ttc", "NotoSans-Regular.ttf", "Helvetica.ttc"] {
+            assert!(!is_hangul_font_name(other), "{other} is not a Hangul font");
         }
     }
 

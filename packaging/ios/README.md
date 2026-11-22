@@ -42,14 +42,27 @@ stick, AirDrop), copy it into that folder in Files, then use Open in SolidCraft.
 ## What works, what doesn't yet
 
 Expected to work: modelling, sketching, the 3D view (Metal), touch navigation (one finger orbits,
-two pan and pinch), Apple Pencil as a pointer, a Magic Keyboard trackpad and keys, opening and
-saving designs, importing and exporting in the folder above.
+two pan and pinch; on at first start, Preferences › Navigation), Apple Pencil, opening and saving
+designs, importing and exporting in the folder above.
+
+A mouse or trackpad is a mouse: left, right and middle buttons (so the navigation preset's
+mouse mapping applies), the pointer over the view (hover highlights), the wheel, and two-finger
+trackpad scrolling, with Shift, Control, Option and Command held. How far one wheel notch
+scrolls hasn't been tuned on a device yet.
+
+Korean, Japanese and Chinese text draw with the iPad's own fonts (Apple SD Gothic Neo for
+Hangul), in the interface and in sketch text. Choose 한국어 under Preferences › Language.
 
 Not done yet:
 
 - **The on-screen keyboard** should appear when a text or number box is tapped (winit shows it
   when egui asks for text input), but it hasn't been tried on a device. Its suggestions and
   autocorrect bar aren't connected.
+- **Korean input by the on-screen keyboard**: the view takes typed text one character at a time
+  and has no composing (marked) text, so Hangul syllables may arrive as separate letters. Typing
+  Korean on a hardware keyboard may behave the same; this needs checking on a device.
+- **Keyboard shortcuts and arrow keys** on a hardware keyboard: only typed characters and
+  Backspace reach the app.
 - **Copy and paste** with other apps. The system clipboard isn't connected.
 - **Files outside the app's folder.** There's no iOS document picker yet, and no "Open in
   SolidCraft" from other apps.
