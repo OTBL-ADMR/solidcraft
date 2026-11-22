@@ -658,10 +658,10 @@ fn draws_simplified_chinese(bytes: &[u8]) -> bool {
 /// one, on every desktop system (#3376: Linux and Windows searched only the fixed paths, so a
 /// Japanese CJK font drew the Chinese UI alone and its simplified characters showed as boxes).
 #[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(target_os = "ios", allow(clippy::vec_init_then_push))]
 fn chinese_font_dirs() -> Vec<std::path::PathBuf> {
     // Elsewhere (the BSDs) there are no folders to add; on iPadOS there is one.
     #[cfg_attr(not(any(target_os = "windows", target_os = "macos", target_os = "linux", target_os = "ios")), allow(unused_mut))]
-    #[cfg_attr(target_os = "ios", allow(clippy::vec_init_then_push))]
     let mut dirs = Vec::new();
     #[cfg(target_os = "windows")]
     {
