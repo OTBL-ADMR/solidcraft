@@ -52,8 +52,11 @@ pub fn run() {
             let services = services(&picker, library.is_some());
             let mut app = SolveApp::new(Session::default(), services);
             let stored = cc.storage.and_then(|s| solidcraft_ui_egui::prefs::stored(|k| s.get_string(k)));
-            if let Some(p) = &stored {
-                app.load_prefs(p);
+            match &stored {
+                Some(p) => app.load_prefs(p),
+                // A first start on the iPad: drags come as touches (a mouse too, through UIKit),
+                // so they move the view as fingers do. Preferences › Navigation turns it off.
+                None => app.preferences.touchscreen_navigation = true,
             }
             app.apply_preferences(&cc.egui_ctx);
             if let Some(rs) = &cc.wgpu_render_state {
