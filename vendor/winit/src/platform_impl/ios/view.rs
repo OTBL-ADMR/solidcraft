@@ -56,12 +56,12 @@ pub struct WinitViewState {
     trackpad_scroll_last_translation: Cell<CGPoint>,
     /// SolidCraft: the hardware keys held whose press this view sent itself (by HID usage), so
     /// their release is sent too and not passed on to UIKit's text input.
-    keys_sent: RefCell<Vec<isize>>,
+    keys_sent: RefCell<Vec<i64>>,
 }
 
 /// SolidCraft: winit's key for a hardware key's HID usage (USB HID usage page 7), with its named
 /// key when it types no text. None for a key winit has no code for.
-fn hid_key(usage: isize) -> Option<(KeyCode, Option<NamedKey>)> {
+fn hid_key(usage: i64) -> Option<(KeyCode, Option<NamedKey>)> {
     use KeyCode as C;
     use NamedKey as N;
     const LETTERS: [KeyCode; 26] = [
@@ -118,7 +118,7 @@ fn hid_key(usage: isize) -> Option<(KeyCode, Option<NamedKey>)> {
 }
 
 /// SolidCraft: whether a modifier key (Control, Shift, Option, Command, left or right).
-fn is_modifier_usage(usage: isize) -> bool {
+fn is_modifier_usage(usage: i64) -> bool {
     (0xE0..=0xE7).contains(&usage)
 }
 
@@ -900,7 +900,8 @@ impl WinitView {
             };
             let flags = unsafe { key.modifierFlags() };
             events.extend(self.modifier_events(window_id, flags));
-            let usage = unsafe { key.keyCode() }.0;
+            // The HID usage (CFIndex).
+            let usage = unsafe { key.keyCode() }.0 as i64;
             match self.key_event(&key, usage, flags, state) {
                 Some(event) => events.push(Self::window_event(window_id, event)),
                 None => all_taken = false,
@@ -918,7 +919,7 @@ impl WinitView {
     fn key_event(
         &self,
         key: &UIKey,
-        usage: isize,
+        usage: i64,
         flags: UIKeyModifierFlags,
         state: ElementState,
     ) -> Option<WindowEvent> {
