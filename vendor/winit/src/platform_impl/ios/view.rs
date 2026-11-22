@@ -9,8 +9,9 @@ use objc2_foundation::{
 };
 use objc2_ui_kit::{
     UICoordinateSpace, UIEvent, UIEventButtonMask, UIForceTouchCapability, UIGestureRecognizer,
-    UIGestureRecognizerDelegate, UIGestureRecognizerState, UIHoverGestureRecognizer, UIKeyInput,
-    UIKeyModifierFlags, UIPanGestureRecognizer, UIPinchGestureRecognizer, UIResponder,
+    UIGestureRecognizerDelegate, UIGestureRecognizerState, UIHoverGestureRecognizer, UIKey,
+    UIKeyInput, UIKeyModifierFlags, UIPanGestureRecognizer, UIPress,
+    UIPressesEvent, UIPinchGestureRecognizer, UIResponder,
     UIRotationGestureRecognizer, UIScrollTypeMask, UITapGestureRecognizer, UITextInputTraits,
     UITouch, UITouchPhase, UITouchType, UITraitEnvironment, UIView,
 };
@@ -23,7 +24,7 @@ use crate::event::{
     TouchPhase, WindowEvent,
 };
 use crate::keyboard::{
-    Key, KeyCode, KeyLocation, ModifiersState, NamedKey, NativeKeyCode, PhysicalKey,
+    Key, KeyCode, KeyLocation, ModifiersState, NamedKey, NativeKey, NativeKeyCode, PhysicalKey,
 };
 use crate::platform_impl::platform::DEVICE_ID;
 use crate::platform_impl::KeyEventExtra;
@@ -53,6 +54,72 @@ pub struct WinitViewState {
     pointer_modifiers: Cell<ModifiersState>,
     wheel_last_translation: Cell<CGPoint>,
     trackpad_scroll_last_translation: Cell<CGPoint>,
+    /// SolidCraft: the hardware keys held whose press this view sent itself (by HID usage), so
+    /// their release is sent too and not passed on to UIKit's text input.
+    keys_sent: RefCell<Vec<isize>>,
+}
+
+/// SolidCraft: winit's key for a hardware key's HID usage (USB HID usage page 7), with its named
+/// key when it types no text. None for a key winit has no code for.
+fn hid_key(usage: isize) -> Option<(KeyCode, Option<NamedKey>)> {
+    use KeyCode as C;
+    use NamedKey as N;
+    const LETTERS: [KeyCode; 26] = [
+        C::KeyA, C::KeyB, C::KeyC, C::KeyD, C::KeyE, C::KeyF, C::KeyG, C::KeyH, C::KeyI, C::KeyJ,
+        C::KeyK, C::KeyL, C::KeyM, C::KeyN, C::KeyO, C::KeyP, C::KeyQ, C::KeyR, C::KeyS, C::KeyT,
+        C::KeyU, C::KeyV, C::KeyW, C::KeyX, C::KeyY, C::KeyZ,
+    ];
+    const DIGITS: [KeyCode; 10] = [
+        C::Digit1, C::Digit2, C::Digit3, C::Digit4, C::Digit5, C::Digit6, C::Digit7, C::Digit8,
+        C::Digit9, C::Digit0,
+    ];
+    const F_KEYS: [(KeyCode, NamedKey); 12] = [
+        (C::F1, N::F1), (C::F2, N::F2), (C::F3, N::F3), (C::F4, N::F4), (C::F5, N::F5),
+        (C::F6, N::F6), (C::F7, N::F7), (C::F8, N::F8), (C::F9, N::F9), (C::F10, N::F10),
+        (C::F11, N::F11), (C::F12, N::F12),
+    ];
+    Some(match usage {
+        0x04..=0x1D => (LETTERS[(usage - 0x04) as usize], None),
+        0x1E..=0x27 => (DIGITS[(usage - 0x1E) as usize], None),
+        0x28 => (C::Enter, Some(N::Enter)),
+        0x29 => (C::Escape, Some(N::Escape)),
+        0x2A => (C::Backspace, Some(N::Backspace)),
+        0x2B => (C::Tab, Some(N::Tab)),
+        0x2C => (C::Space, None),
+        0x2D => (C::Minus, None),
+        0x2E => (C::Equal, None),
+        0x2F => (C::BracketLeft, None),
+        0x30 => (C::BracketRight, None),
+        0x31 => (C::Backslash, None),
+        0x33 => (C::Semicolon, None),
+        0x34 => (C::Quote, None),
+        0x35 => (C::Backquote, None),
+        0x36 => (C::Comma, None),
+        0x37 => (C::Period, None),
+        0x38 => (C::Slash, None),
+        0x3A..=0x45 => {
+            let (code, named) = F_KEYS[(usage - 0x3A) as usize];
+            (code, Some(named))
+        }
+        0x49 => (C::Insert, Some(N::Insert)),
+        0x4A => (C::Home, Some(N::Home)),
+        0x4B => (C::PageUp, Some(N::PageUp)),
+        0x4C => (C::Delete, Some(N::Delete)),
+        0x4D => (C::End, Some(N::End)),
+        0x4E => (C::PageDown, Some(N::PageDown)),
+        0x4F => (C::ArrowRight, Some(N::ArrowRight)),
+        0x50 => (C::ArrowLeft, Some(N::ArrowLeft)),
+        0x51 => (C::ArrowDown, Some(N::ArrowDown)),
+        0x52 => (C::ArrowUp, Some(N::ArrowUp)),
+        0x58 => (C::NumpadEnter, Some(N::Enter)),
+        0x64 => (C::IntlBackslash, None),
+        _ => return None,
+    })
+}
+
+/// SolidCraft: whether a modifier key (Control, Shift, Option, Command, left or right).
+fn is_modifier_usage(usage: isize) -> bool {
+    (0xE0..=0xE7).contains(&usage)
 }
 
 /// SolidCraft: points of a discrete (mouse wheel) scroll taken as one line, as a wheel's
@@ -413,6 +480,31 @@ declare_class!(
             self.send_scroll(recognizer, delta, phase);
         }
 
+        // SolidCraft: a hardware keyboard. A key that types no text (Enter, Escape, Tab, the
+        // arrows, Home, End, Page Up and Down, forward Delete, F1-F12) or is pressed with Command
+        // or Control is sent as a key here; any other key goes on to UIKit's text input, which
+        // composes it (Korean, Japanese) and types it through `insertText`, as before.
+        #[method(pressesBegan:withEvent:)]
+        fn presses_began(&self, presses: &NSSet<UIPress>, event: Option<&UIPressesEvent>) {
+            if !self.handle_presses(presses, ElementState::Pressed) {
+                let _: () = unsafe { msg_send![super(self), pressesBegan: presses, withEvent: event] };
+            }
+        }
+
+        #[method(pressesEnded:withEvent:)]
+        fn presses_ended(&self, presses: &NSSet<UIPress>, event: Option<&UIPressesEvent>) {
+            if !self.handle_presses(presses, ElementState::Released) {
+                let _: () = unsafe { msg_send![super(self), pressesEnded: presses, withEvent: event] };
+            }
+        }
+
+        #[method(pressesCancelled:withEvent:)]
+        fn presses_cancelled(&self, presses: &NSSet<UIPress>, event: Option<&UIPressesEvent>) {
+            if !self.handle_presses(presses, ElementState::Released) {
+                let _: () = unsafe { msg_send![super(self), pressesCancelled: presses, withEvent: event] };
+            }
+        }
+
         #[method(canBecomeFirstResponder)]
         fn can_become_first_responder(&self) -> bool {
             true
@@ -472,6 +564,7 @@ impl WinitView {
             pointer_modifiers: Cell::new(ModifiersState::empty()),
             wheel_last_translation: Cell::new(CGPoint { x: 0.0, y: 0.0 }),
             trackpad_scroll_last_translation: Cell::new(CGPoint { x: 0.0, y: 0.0 }),
+            keys_sent: RefCell::new(Vec::new()),
         });
         let this: Retained<Self> = unsafe { msg_send_id![super(this), initWithFrame: frame] };
 
@@ -791,9 +884,134 @@ impl WinitView {
         app_state::handle_nonuser_events(mtm, touch_events);
     }
 
+    /// SolidCraft: send the keys of `presses` that this view takes (see `pressesBegan`), and
+    /// the keys held as `ModifiersChanged`. True when every press was taken, so none goes on to
+    /// UIKit (a press with no key, before iPadOS 13.4, goes on).
+    fn handle_presses(&self, presses: &NSSet<UIPress>, state: ElementState) -> bool {
+        let Some(window) = self.window() else { return false };
+        let window_id = RootWindowId(window.id());
+        let mtm = MainThreadMarker::from(self);
+        let mut events = Vec::new();
+        let mut all_taken = true;
+        for press in presses {
+            let Some(key) = (unsafe { press.key(mtm) }) else {
+                all_taken = false;
+                continue;
+            };
+            let flags = unsafe { key.modifierFlags() };
+            events.extend(self.modifier_events(window_id, flags));
+            let usage = unsafe { key.keyCode() }.0;
+            match self.key_event(&key, usage, flags, state) {
+                Some(event) => events.push(Self::window_event(window_id, event)),
+                None => all_taken = false,
+            }
+        }
+        if !events.is_empty() {
+            app_state::handle_nonuser_events(mtm, events);
+        }
+        all_taken
+    }
+
+    /// SolidCraft: the key event for one hardware key, when this view takes it: on a press,
+    /// a key that types no text or one held with Command or Control; on a release, a key whose
+    /// press it took. Modifier keys only change the modifiers.
+    fn key_event(
+        &self,
+        key: &UIKey,
+        usage: isize,
+        flags: UIKeyModifierFlags,
+        state: ElementState,
+    ) -> Option<WindowEvent> {
+        if is_modifier_usage(usage) {
+            return None;
+        }
+        let (code, named) = hid_key(usage)?;
+        let sent = &self.ivars().keys_sent;
+        match state {
+            ElementState::Pressed => {
+                let shortcut = flags.intersects(
+                    UIKeyModifierFlags::UIKeyModifierCommand | UIKeyModifierFlags::UIKeyModifierControl,
+                );
+                // Backspace stays with the text input, which deletes inside a composition.
+                if named == Some(NamedKey::Backspace) && !shortcut {
+                    return None;
+                }
+                if named.is_none() && !shortcut {
+                    return None;
+                }
+                let mut held = sent.borrow_mut();
+                if !held.contains(&usage) {
+                    held.push(usage);
+                }
+            }
+            ElementState::Released => {
+                let mut held = sent.borrow_mut();
+                let at = held.iter().position(|u| *u == usage)?;
+                held.swap_remove(at);
+            }
+        }
+        let logical_key = match named {
+            Some(named) => Key::Named(named),
+            None => {
+                let typed = unsafe { key.charactersIgnoringModifiers() }.to_string().to_lowercase();
+                if typed.is_empty() {
+                    Key::Unidentified(NativeKey::Unidentified)
+                } else {
+                    Key::Character(smol_str::SmolStr::new(typed))
+                }
+            }
+        };
+        let location = if code == KeyCode::NumpadEnter { KeyLocation::Numpad } else { KeyLocation::Standard };
+        Some(WindowEvent::KeyboardInput {
+            device_id: DEVICE_ID,
+            event: KeyEvent {
+                physical_key: PhysicalKey::Code(code),
+                logical_key,
+                text: None,
+                location,
+                state,
+                repeat: false,
+                platform_specific: KeyEventExtra {},
+            },
+            is_synthetic: false,
+        })
+    }
+
+    /// SolidCraft: Return on the on-screen keyboard types a newline; send it as the Enter key, as
+    /// a hardware keyboard's is.
+    fn send_enter(&self, window_id: RootWindowId) {
+        let mtm = MainThreadMarker::from(self);
+        app_state::handle_nonuser_events(
+            mtm,
+            [ElementState::Pressed, ElementState::Released].map(|state| {
+                Self::window_event(
+                    window_id,
+                    WindowEvent::KeyboardInput {
+                        device_id: DEVICE_ID,
+                        event: KeyEvent {
+                            physical_key: PhysicalKey::Code(KeyCode::Enter),
+                            logical_key: Key::Named(NamedKey::Enter),
+                            text: None,
+                            location: KeyLocation::Standard,
+                            state,
+                            repeat: false,
+                            platform_specific: KeyEventExtra {},
+                        },
+                        is_synthetic: false,
+                    },
+                )
+            }),
+        );
+    }
+
     fn handle_insert_text(&self, text: &NSString) {
         let window = self.window().unwrap();
         let window_id = RootWindowId(window.id());
+        let typed = text.to_string();
+        if typed == "\n" || typed == "\r" {
+            self.send_enter(window_id);
+            return;
+        }
         let mtm = MainThreadMarker::new().unwrap();
         // send individual events for each character
         app_state::handle_nonuser_events(

@@ -385,6 +385,11 @@ features = [
     "UIGestureRecognizer",
     # SolidCraft: the pointer of a mouse or trackpad over the view, without a button down.
     "UIHoverGestureRecognizer",
+    # SolidCraft: keys of a hardware keyboard (pressesBegan), for those that type no text.
+    "UIKey",
+    "UIKeyConstants",
+    "UIPress",
+    "UIPressesEvent",
     "UITextInput",
     "UITextInputTraits",
     "UIOrientation",

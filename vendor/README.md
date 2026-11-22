@@ -229,3 +229,15 @@ SolidCraft changes:
   are told apart elsewhere. The keys held (`modifierFlags`) are sent as `ModifiersChanged`
   before each of these. Fingers and the pencil reach `touchesBegan` as before. Upstream winit
   0.30 has no iOS mouse support, and eframe 0.37 requires winit 0.30.
+- `src/platform_impl/ios/view.rs`, `Cargo.toml` (the `UIKey`, `UIKeyConstants`, `UIPress` and
+  `UIPressesEvent` features of `objc2-ui-kit`): a hardware keyboard's keys that type no text on
+  iPadOS. winit only had UIKit's text input (`insertText`, `deleteBackward`), so Enter came as a
+  typed newline and the arrows, Escape, Tab, Home, End, Page Up and Down, forward Delete and
+  F1–F12 sent nothing. `pressesBegan`/`pressesEnded`/`pressesCancelled` now send those as
+  `KeyboardInput` (`PhysicalKey` from the key's HID usage, `Key::Named`, no text), and so any key
+  held with Command or Control (`Key::Character` of `charactersIgnoringModifiers`, no text), so
+  shortcuts reach the app; the release of a key whose press was sent is sent too, and neither goes
+  on to UIKit. Every other key, Backspace included, goes on to UIKit's text input as before, so it
+  is still composed (Korean, Japanese) and typed through `insertText`. The keys held are sent as
+  `ModifiersChanged`. A newline typed by the on-screen keyboard's Return is sent as the Enter key.
+  UIKit sends no repeats of a held key, so a held arrow moves once.
