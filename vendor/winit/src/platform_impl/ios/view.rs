@@ -57,6 +57,11 @@ pub struct WinitViewState {
     /// SolidCraft: the hardware keys held whose press this view sent itself (by HID usage), so
     /// their release is sent too and not passed on to UIKit's text input.
     keys_sent: RefCell<Vec<i64>>,
+    /// SolidCraft: whether the app is taking text (`set_ime_allowed`). The view stays the first
+    /// responder either way, so keys keep coming; without text input the on-screen keyboard is
+    /// hidden by an empty input view, and every key is sent as a key, not typed.
+    text_input_wanted: Cell<bool>,
+    no_keyboard_view: RefCell<Option<Retained<UIView>>>,
 }
 
 /// SolidCraft: winit's key for a hardware key's HID usage (USB HID usage page 7), with its named
@@ -265,6 +270,8 @@ declare_class!(
 
         #[method(touchesBegan:withEvent:)]
         fn touches_began(&self, touches: &NSSet<UITouch>, event: Option<&UIEvent>) {
+            // SolidCraft: back as the first responder after the app was in the background.
+            self.take_keys();
             self.handle_touches(touches, event)
         }
 
@@ -505,6 +512,28 @@ declare_class!(
             }
         }
 
+        // SolidCraft: the keys come to this view from the start.
+        #[method(didMoveToWindow)]
+        fn did_move_to_window(&self) {
+            let _: () = unsafe { msg_send![super(self), didMoveToWindow] };
+            self.take_keys();
+        }
+
+        // SolidCraft: no on-screen keyboard unless the app takes text (an empty view in its
+        // place); the system's keyboard (nil) when it does.
+        #[method_id(inputView)]
+        fn input_view(&self) -> Option<Retained<UIView>> {
+            if self.ivars().text_input_wanted.get() {
+                return None;
+            }
+            let mtm = MainThreadMarker::from(self);
+            let mut slot = self.ivars().no_keyboard_view.borrow_mut();
+            let view = slot.get_or_insert_with(|| {
+                UIView::initWithFrame(mtm.alloc(), CGRect { origin: CGPoint { x: 0.0, y: 0.0 }, size: objc2_foundation::CGSize { width: 0.0, height: 0.0 } })
+            });
+            Some(view.clone())
+        }
+
         #[method(canBecomeFirstResponder)]
         fn can_become_first_responder(&self) -> bool {
             true
@@ -565,6 +594,8 @@ impl WinitView {
             wheel_last_translation: Cell::new(CGPoint { x: 0.0, y: 0.0 }),
             trackpad_scroll_last_translation: Cell::new(CGPoint { x: 0.0, y: 0.0 }),
             keys_sent: RefCell::new(Vec::new()),
+            text_input_wanted: Cell::new(false),
+            no_keyboard_view: RefCell::new(None),
         });
         let this: Retained<Self> = unsafe { msg_send_id![super(this), initWithFrame: frame] };
 
@@ -884,6 +915,21 @@ impl WinitView {
         app_state::handle_nonuser_events(mtm, touch_events);
     }
 
+    /// SolidCraft: be the first responder, so the keyboard's keys come here.
+    fn take_keys(&self) {
+        if self.window().is_some() && !unsafe { self.isFirstResponder() } {
+            unsafe { self.becomeFirstResponder() };
+        }
+    }
+
+    /// SolidCraft: `Window::set_ime_allowed`: show or hide the on-screen keyboard and choose
+    /// whether keys type text, staying the first responder.
+    pub(crate) fn set_text_input(&self, wanted: bool) {
+        self.ivars().text_input_wanted.set(wanted);
+        self.take_keys();
+        unsafe { self.reloadInputViews() };
+    }
+
     /// SolidCraft: send the keys of `presses` that this view takes (see `pressesBegan`), and
     /// the keys held as `ModifiersChanged`. True when every press was taken, so none goes on to
     /// UIKit (a press with no key, before iPadOS 13.4, goes on).
@@ -914,8 +960,9 @@ impl WinitView {
     }
 
     /// SolidCraft: the key event for one hardware key, when this view takes it: on a press,
-    /// a key that types no text or one held with Command or Control; on a release, a key whose
-    /// press it took. Modifier keys only change the modifiers.
+    /// any key while the app takes no text, else a key that types no text or one held with
+    /// Command or Control; on a release, a key whose press it took. Modifier keys only change
+    /// the modifiers.
     fn key_event(
         &self,
         key: &UIKey,
@@ -933,12 +980,17 @@ impl WinitView {
                 let shortcut = flags.intersects(
                     UIKeyModifierFlags::UIKeyModifierCommand | UIKeyModifierFlags::UIKeyModifierControl,
                 );
-                // Backspace stays with the text input, which deletes inside a composition.
-                if named == Some(NamedKey::Backspace) && !shortcut {
-                    return None;
-                }
-                if named.is_none() && !shortcut {
-                    return None;
+                // While the app takes text, typing keys go to the text input, which composes
+                // them (Korean); Backspace too, which deletes inside a composition. Otherwise
+                // every key is a key, so single-key shortcuts work whatever the input language
+                // (a Korean ㅣ is still the L key).
+                if self.ivars().text_input_wanted.get() {
+                    if named == Some(NamedKey::Backspace) && !shortcut {
+                        return None;
+                    }
+                    if named.is_none() && !shortcut {
+                        return None;
+                    }
                 }
                 let mut held = sent.borrow_mut();
                 if !held.contains(&usage) {

@@ -248,3 +248,12 @@ SolidCraft changes:
   is still composed (Korean, Japanese) and typed through `insertText`. The keys held are sent as
   `ModifiersChanged`. A newline typed by the on-screen keyboard's Return is sent as the Enter key.
   UIKit sends no repeats of a held key, so a held arrow moves once.
+- `src/platform_impl/ios/view.rs`, `window.rs` (`set_ime_allowed`): the view stays UIKit's first
+  responder, so the keys above reach the app when no text is being typed. winit resigned it
+  to hide the on-screen keyboard, and a hardware keyboard's keys then went nowhere: no
+  single-key shortcuts, Delete, Escape or ⌘Z in the 3D view. The view now becomes the first
+  responder when it joins a window and at a touch (after the app was in the background), and
+  `set_ime_allowed` only chooses its input view: UIKit's keyboard while the app takes text, an
+  empty view otherwise, which keeps the on-screen keyboard hidden. While the app takes no text,
+  every key with a code (Backspace and letters too) is sent as a key and not typed, so
+  single-key shortcuts work whatever the input language (a Korean ㅣ is still `KeyL`).

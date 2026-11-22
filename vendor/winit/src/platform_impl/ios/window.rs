@@ -372,15 +372,10 @@ impl Inner {
     /// [objc2_ui_kit::UIKeyInput], the keyboard will be shown.
     /// <https://developer.apple.com/documentation/uikit/uiresponder/1621113-becomefirstresponder>
     pub fn set_ime_allowed(&self, allowed: bool) {
-        if allowed {
-            unsafe {
-                self.view.becomeFirstResponder();
-            }
-        } else {
-            unsafe {
-                self.view.resignFirstResponder();
-            }
-        }
+        // SolidCraft: the view stays the first responder, so a hardware keyboard's keys (shortcuts,
+        // Delete, Escape) reach the app when no text is being typed; the on-screen keyboard is
+        // hidden by an empty input view instead of by resigning.
+        self.view.set_text_input(allowed);
     }
 
     pub fn set_ime_purpose(&self, _purpose: ImePurpose) {
