@@ -523,15 +523,12 @@ declare_class!(
         // place); the system's keyboard (nil) when it does.
         #[method_id(inputView)]
         fn input_view(&self) -> Option<Retained<UIView>> {
+            // (No early `return` here: `method_id` wraps the body's value.)
             if self.ivars().text_input_wanted.get() {
-                return None;
+                None
+            } else {
+                Some(self.no_keyboard_view())
             }
-            let mtm = MainThreadMarker::from(self);
-            let mut slot = self.ivars().no_keyboard_view.borrow_mut();
-            let view = slot.get_or_insert_with(|| {
-                UIView::initWithFrame(mtm.alloc(), CGRect { origin: CGPoint { x: 0.0, y: 0.0 }, size: objc2_foundation::CGSize { width: 0.0, height: 0.0 } })
-            });
-            Some(view.clone())
         }
 
         #[method(canBecomeFirstResponder)]
@@ -913,6 +910,20 @@ impl WinitView {
         }
         let mtm = MainThreadMarker::new().unwrap();
         app_state::handle_nonuser_events(mtm, touch_events);
+    }
+
+    /// SolidCraft: the empty input view that keeps the on-screen keyboard hidden.
+    fn no_keyboard_view(&self) -> Retained<UIView> {
+        let mtm = MainThreadMarker::from(self);
+        let mut slot = self.ivars().no_keyboard_view.borrow_mut();
+        let view = slot.get_or_insert_with(|| {
+            let zero = CGRect {
+                origin: CGPoint { x: 0.0, y: 0.0 },
+                size: objc2_foundation::CGSize { width: 0.0, height: 0.0 },
+            };
+            UIView::initWithFrame(mtm.alloc(), zero)
+        });
+        view.clone()
     }
 
     /// SolidCraft: be the first responder, so the keyboard's keys come here.
