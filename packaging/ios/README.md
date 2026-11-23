@@ -72,6 +72,13 @@ Not done yet:
 
 ## Reporting problems
 
+To see where a slow operation spends its time, turn on Preferences › Graphics › **Profile
+operations** and run the operation. The profiler's report is written to
+**On My iPad › SolidCraft › Profile**: `report.json` (time per category and per step, the
+same reply `diagnostics.profile` gives on the desktop) and `trace.json` (a Chrome trace, for
+Perfetto or chrome://tracing). It is updated every couple of seconds while profiling is on.
+
+
 When the app quits on start, connect the iPad to a Mac and open Console.app; filter by
 `solidcraft-ios` to see why. Crash reports are under Settings › Privacy & Security › Analytics
 Data, as `solidcraft-ios-…`.

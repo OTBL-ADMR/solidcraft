@@ -10,6 +10,8 @@ mod files;
 mod ios;
 #[cfg_attr(not(target_os = "ios"), allow(dead_code))]
 mod prefs_writer;
+#[cfg_attr(not(target_os = "ios"), allow(dead_code))]
+mod profile_log;
 
 #[cfg(target_os = "ios")]
 fn main() {

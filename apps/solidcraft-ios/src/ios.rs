@@ -8,6 +8,7 @@ use solidcraft_ui_egui::{Services, SolveApp};
 
 use crate::files::{Ask, Library, Picker};
 use crate::prefs_writer::{Due, PrefsWriter};
+use crate::profile_log::ProfileLog;
 
 /// The scene's depth buffer: 32-bit float with a stencil where the device has it (every Apple GPU
 /// that runs iPadOS 15), else 24 bits. Drawn offscreen; the window's pass has no depth.
@@ -75,7 +76,7 @@ pub fn run() {
             if let Ok(prefs) = app.try_prefs() {
                 prefs_writer.read(prefs);
             }
-            Ok(Box::new(Shell { app, picker, library, prefs_writer }))
+            Ok(Box::new(Shell { app, picker, library, prefs_writer, profile_log: ProfileLog::default() }))
         }),
     );
     if let Err(e) = result {
@@ -137,6 +138,7 @@ struct Shell {
     picker: Rc<Picker>,
     library: Option<Library>,
     prefs_writer: PrefsWriter,
+    profile_log: ProfileLog,
 }
 
 impl eframe::App for Shell {
@@ -155,6 +157,8 @@ impl eframe::App for Shell {
         ui.scope_builder(egui::UiBuilder::new().max_rect(content), |ui| self.app.ui(ui));
         if let Some(library) = &self.library {
             self.picker.ui(library, ui.ctx());
+            // Preferences › Graphics › Profile operations: the report, in Files.
+            self.profile_log.tick(self.app.preferences.profile_operations, library, Instant::now());
         }
         self.write_prefs(ui.ctx(), frame);
     }

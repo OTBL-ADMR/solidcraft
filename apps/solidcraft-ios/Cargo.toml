@@ -27,6 +27,7 @@ solidcraft-engine = { workspace = true }
 solidcraft-ui-egui = { workspace = true }
 egui = { workspace = true }
 log = { workspace = true }
+serde_json = { workspace = true }
 eframe = { workspace = true, optional = true, features = ["default_fonts", "wgpu"] }
 
 # The window and the GPU: winit's UIKit backend and wgpu's Metal backend. No clipboard, accessibility
