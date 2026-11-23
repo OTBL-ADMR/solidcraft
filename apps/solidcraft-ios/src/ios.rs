@@ -51,6 +51,9 @@ pub fn run() {
             let picker = Rc::new(Picker::default());
             let services = services(&picker, library.is_some());
             let mut app = SolveApp::new(Session::default(), services);
+            // OK computes a slow feature (a fillet) off the window thread after a moment, as on
+            // the desktop, instead of freezing the screen until it is done.
+            app.apply_off_thread = Some(solidcraft_ui_egui::dialogs::APPLY_AT_ONCE);
             let stored = cc.storage.and_then(|s| solidcraft_ui_egui::prefs::stored(|k| s.get_string(k)));
             match &stored {
                 Some(p) => app.load_prefs(p),
