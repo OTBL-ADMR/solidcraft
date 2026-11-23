@@ -6320,6 +6320,7 @@ dependencies = [
  "eframe",
  "egui",
  "log",
+ "serde_json",
  "solidcraft-engine",
  "solidcraft-ui-egui",
 ]
