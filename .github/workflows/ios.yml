@@ -21,12 +21,14 @@ concurrency:
 
 jobs:
   ipa:
-    runs-on: macos-15
+    # Intel: GitHub's Apple-silicon macOS runners were often full (jobs cancelled unstarted);
+    # an Intel Mac builds the arm64 iPad app as well.
+    runs-on: macos-15-intel
     timeout-minutes: 330
     env:
       CARGO_TERM_COLOR: always
       CARGO_INCREMENTAL: "0"
-      # The runner has 7 GB: no link-time optimisation, three jobs.
+      # Keep the build light: no link-time optimisation, three jobs.
       CARGO_PROFILE_RELEASE_LTO: "false"
       CARGO_PROFILE_RELEASE_DEBUG: "false"
     steps:
